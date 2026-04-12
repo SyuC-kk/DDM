@@ -24,9 +24,6 @@ def extract_feat_chossed(img, backbone):
     feat = feat.reshape(feat.shape[0], feat.shape[1], -1)
     feat = feat.permute(0, 2, 1)
 
-    # B = feat.shape[0]
-    # cls_tokens = backbone.class_embedding.expand(B, 1, -1)
-    # feat = torch.cat((cls_tokens, feat), dim=1)
     feat = feat + backbone.positional_embedding.to(feat.dtype)
 
     feat = backbone.patch_dropout(feat)
@@ -35,7 +32,7 @@ def extract_feat_chossed(img, backbone):
     feat = feat.permute(1, 0, 2)  # NLD -> LND
     for i in range(backbone.transformer.layers-1):
         feat = backbone.transformer.resblocks[i](feat)
-        # feats.append(feat.permute(1, 0, 2).clone())
+
     temp = backbone.transformer.resblocks[-1].ln_1(feat.clone())
     temp = F.linear(temp, backbone.transformer.resblocks[-1].attn.in_proj_weight, backbone.transformer.resblocks[-1].attn.in_proj_bias)
     N, L, C = temp.shape
@@ -45,13 +42,8 @@ def extract_feat_chossed(img, backbone):
     temp += feat
     temp = temp + backbone.transformer.resblocks[-1].ls_2(backbone.transformer.resblocks[-1].mlp(backbone.transformer.resblocks[-1].ln_2(temp)))
 
-    # feat = backbone.transformer.resblocks[-1](feat)
-    # feats.append(feat.permute(1, 0, 2).clone())
-    feats.append(temp.permute(1, 0, 2).clone())
 
-    # feat = backbone.transformer(feat)
-    # feat = feat.permute(1, 0, 2)  # LND -> NLD
-    # feat = backbone.ln_post(feat)
+    feats.append(temp.permute(1, 0, 2).clone())
 
     return feats
 
@@ -171,10 +163,7 @@ class ImageClean(nn.Module):
         y = rearrange(y, 'B C (H W)-> B C H W', H=30)
         b, c, h, w = x.shape
 
-        # q = self.qkv_dwconv(self.qkv(q))
-        # kv = self.qkv_dwconv(self.qkv(s))
-        # q, _, _ = q.chunk(3, dim=1)
-        # _, k, v = kv.chunk(3, dim=1)
+
         qkv_q = self.qkv_dwconv(self.qkv(x))
         qkv_s = self.qkv_dwconv(self.qkv(y))
         q, _, _ = qkv_q.chunk(3, dim=1)
@@ -188,14 +177,11 @@ class ImageClean(nn.Module):
         k = torch.nn.functional.normalize(k, dim=-1)
 
         attn = (q @ k.transpose(-2, -1)) * self.temperature #[c,c]
-        # attn = (q.transpose(-2, -1) @ k) * self.temperature  # [hw, hw]
-        # attn = attn.softmax(dim=-1)
 
-        # out = (attn @ v.transpose(-2, -1)) #[hw,hw]
         out = (attn @ v) #[c,c]
 
         out = rearrange(out, 'b head c (h w) -> b (head c) h w', head=self.num_heads, h=h, w=w) #[c,c]
-        # out = rearrange(out, 'b head (h w) c -> b (head c) h w', head=self.num_heads, h=h, w=w) #[hw, hw]
+
 
         out = self.project_out(out)
 
@@ -322,10 +308,6 @@ class DDMNet(nn.Module):
             loss1, _, _ = self.info_nce_loss(query_deg_feat, q_degtype_feat)
             loss2, _, _ = self.info_nce_loss(supp_deg_feat, s_degtype_feat)
 
-            corrt = torch.bmm(query_clip_feat.transpose(1, 2), text_feat).view(bsz, ha, wa, hb, wb) #single cuda
-            corrt = corrt.clamp(min=0).unsqueeze(1)
-
-
             s_sub_feat = self.imgclean(supp_deg_feat, support_clip_feats) #[bs,512,900]
             q_sub_feat = self.imgclean(query_deg_feat, query_clip_feat)
             q_sub_feat = self.imgclean(q_sub_feat, s_sub_feat) #[bs,512,900]
@@ -333,9 +315,8 @@ class DDMNet(nn.Module):
             corr_d = corr_d.clamp(min=0).unsqueeze(1)
             query_feats = self.backbone.get_intermediate_layers(x=query_img, n=range(0, 12), reshape=True)
             support_feats = self.backbone.get_intermediate_layers(x=support_img, n=range(0, 12), reshape=True) #12*[b,768,30,30] tuple 12
-            fea = rearrange(q_sub_feat, 'B C (H W)-> B C H W', H=30)
             corr = Correlation.multilayer_correlation(query_feats, support_feats, self.stack_ids) # [batch, 12，30，30，30，30]
-            corr = torch.cat((corr, corr_d), dim=1) #需要修改hpn_learner的nbottlenecks值
+            corr = torch.cat((corr, corr_d), dim=1)
 
         logit_mask = self.hpn_learner(corr)
         if not self.use_original_imgsize:
@@ -355,13 +336,8 @@ class DDMNet(nn.Module):
         logit_mask_agg = 0
         for s_idx in range(nshot):
             training = False
-            # logit_mask = self(batch['query_img'], batch['support_imgs'][:, s_idx], batch['support_masks'][:, s_idx],  batch['class_name'])
             logit_mask, _ = self(batch['query_img'], batch['support_imgs'][:, s_idx], batch['support_masks'][:, s_idx],  batch['class_name'], args, batch['query_deg_type'],
                            batch['supp_deg_types'], training=False)
-            # macs, params = profile(self, inputs=(batch['query_img'], batch['support_imgs'][:, s_idx], batch['support_masks'][:, s_idx],  batch['class_name'], args, batch['query_deg_type'],
-            #                batch['supp_deg_types'], training), verbose=False)
-            # flops, params = clever_format([macs * 2, params], "%.3f")  # FLOPs = MACs * 2
-            # print(f"Model FLOPs: {flops}, Parameters: {params}")
 
             if self.use_original_imgsize:
                 org_qry_imsize = tuple([batch['org_query_imsize'][1].item(), batch['org_query_imsize'][0].item()])

@@ -7,7 +7,6 @@ import os
 import torch.nn.functional as F
 
 from model.main import DDMNet
-# from model.dino_clip import HCCNet
 from common.logger import Logger, AverageMeter
 from common.evaluation import Evaluator
 from common import utils, my_optim
